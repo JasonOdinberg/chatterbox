@@ -91,12 +91,9 @@ def generate(audio, target_voice_path, chunk_seconds, overlap_seconds):
         temp_paths.append(target_voice_temp)
 
     try:
-        if target_voice_temp:
-            model.set_target_voice(target_voice_temp)
-
         audio_samples, sample_rate = librosa.load(input_path, sr=None, mono=True)
         if chunk_seconds <= 0:
-            wav = _generate_chunk(audio_samples, sample_rate, target_voice_path=None)
+            wav = _generate_chunk(audio_samples, sample_rate, target_voice_path=target_voice_temp)
             return model.sr, wav
 
         chunk_samples = int(chunk_seconds * sample_rate)
@@ -106,7 +103,7 @@ def generate(audio, target_voice_path, chunk_seconds, overlap_seconds):
         generated = []
         for start, end in chunks:
             chunk_audio = audio_samples[start:end]
-            wav = _generate_chunk(chunk_audio, sample_rate, target_voice_path=None)
+            wav = _generate_chunk(chunk_audio, sample_rate, target_voice_path=target_voice_temp)
             generated.append(wav)
 
         if not generated:
