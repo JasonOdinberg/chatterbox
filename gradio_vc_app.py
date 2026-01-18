@@ -1,6 +1,7 @@
 import librosa
 import numpy as np
 import os
+import shutil
 import soundfile as sf
 import tempfile
 import torch
@@ -46,6 +47,23 @@ def _create_temp_wav_path():
     return temp_path
 
 
+def _create_temp_path(suffix):
+    temp_file = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    temp_path = temp_file.name
+    temp_file.close()
+    return temp_path
+
+
+def _copy_audio_to_temp(source_path):
+    if not source_path:
+        return None
+    _, ext = os.path.splitext(source_path)
+    suffix = ext if ext else ".wav"
+    temp_path = _create_temp_path(suffix)
+    shutil.copyfile(source_path, temp_path)
+    return temp_path
+
+
 def _generate_chunk(chunk_audio, sample_rate, target_voice_path):
     if hasattr(model, "generate_from_audio"):
         wav = model.generate_from_audio(chunk_audio, sample_rate, target_voice_path=target_voice_path)
@@ -64,33 +82,48 @@ def _generate_chunk(chunk_audio, sample_rate, target_voice_path):
 
 
 def generate(audio, target_voice_path, chunk_seconds, overlap_seconds):
-    if target_voice_path:
-        model.set_target_voice(target_voice_path)
+    temp_paths = []
+    input_path = _copy_audio_to_temp(audio)
+    if input_path:
+        temp_paths.append(input_path)
+    target_voice_temp = _copy_audio_to_temp(target_voice_path)
+    if target_voice_temp:
+        temp_paths.append(target_voice_temp)
 
-    audio_samples, sample_rate = librosa.load(audio, sr=None, mono=True)
-    if chunk_seconds <= 0:
-        wav = _generate_chunk(audio_samples, sample_rate, target_voice_path=None)
-        return model.sr, wav
+    try:
+        if target_voice_temp:
+            model.set_target_voice(target_voice_temp)
 
-    chunk_samples = int(chunk_seconds * sample_rate)
-    overlap_samples = int(overlap_seconds * sample_rate)
-    chunks = _chunk_indices(len(audio_samples), chunk_samples, overlap_samples)
+        audio_samples, sample_rate = librosa.load(input_path, sr=None, mono=True)
+        if chunk_seconds <= 0:
+            wav = _generate_chunk(audio_samples, sample_rate, target_voice_path=None)
+            return model.sr, wav
 
-    generated = []
-    for start, end in chunks:
-        chunk_audio = audio_samples[start:end]
-        wav = _generate_chunk(chunk_audio, sample_rate, target_voice_path=None)
-        generated.append(wav)
+        chunk_samples = int(chunk_seconds * sample_rate)
+        overlap_samples = int(overlap_seconds * sample_rate)
+        chunks = _chunk_indices(len(audio_samples), chunk_samples, overlap_samples)
 
-    if not generated:
-        return model.sr, np.array([], dtype=np.float32)
+        generated = []
+        for start, end in chunks:
+            chunk_audio = audio_samples[start:end]
+            wav = _generate_chunk(chunk_audio, sample_rate, target_voice_path=None)
+            generated.append(wav)
 
-    overlap_out = int(overlap_seconds * model.sr)
-    stitched = generated[0]
-    for segment in generated[1:]:
-        stitched = _crossfade(stitched, segment, overlap_out)
+        if not generated:
+            return model.sr, np.array([], dtype=np.float32)
 
-    return model.sr, stitched
+        overlap_out = int(overlap_seconds * model.sr)
+        stitched = generated[0]
+        for segment in generated[1:]:
+            stitched = _crossfade(stitched, segment, overlap_out)
+
+        return model.sr, stitched
+    finally:
+        for path in temp_paths:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
 
 
 demo = gr.Interface(
