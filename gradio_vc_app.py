@@ -1,5 +1,6 @@
 import librosa
 import numpy as np
+import os
 import soundfile as sf
 import tempfile
 import torch
@@ -38,23 +39,28 @@ def _chunk_indices(num_samples, chunk_samples, overlap_samples):
     return indices
 
 
+def _create_temp_wav_path():
+    temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    temp_path = temp_file.name
+    temp_file.close()
+    return temp_path
+
+
 def _generate_chunk(chunk_audio, sample_rate, target_voice_path):
     if hasattr(model, "generate_from_audio"):
         wav = model.generate_from_audio(chunk_audio, sample_rate, target_voice_path=target_voice_path)
         return wav.squeeze(0).numpy()
 
-    fd, temp_path = tempfile.mkstemp(suffix=".wav")
-    os.close(fd)
+    temp_path = _create_temp_wav_path()
     try:
         sf.write(temp_path, chunk_audio, sample_rate)
         wav = model.generate(temp_path, target_voice_path=target_voice_path)
         return wav.squeeze(0).numpy()
     finally:
-        os.remove(temp_path)
-    with tempfile.NamedTemporaryFile(suffix=".wav") as temp_wav:
-        sf.write(temp_wav.name, chunk_audio, sample_rate)
-        wav = model.generate(temp_wav.name, target_voice_path=target_voice_path)
-        return wav.squeeze(0).numpy()
+        try:
+            os.remove(temp_path)
+        except FileNotFoundError:
+            pass
 
 
 def generate(audio, target_voice_path, chunk_seconds, overlap_seconds):
