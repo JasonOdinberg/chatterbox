@@ -1,5 +1,7 @@
 import librosa
 import numpy as np
+import soundfile as sf
+import tempfile
 import torch
 import gradio as gr
 from chatterbox.vc import ChatterboxVC
@@ -36,14 +38,25 @@ def _chunk_indices(num_samples, chunk_samples, overlap_samples):
     return indices
 
 
+def _generate_chunk(chunk_audio, sample_rate, target_voice_path):
+    if hasattr(model, "generate_from_audio"):
+        wav = model.generate_from_audio(chunk_audio, sample_rate, target_voice_path=target_voice_path)
+        return wav.squeeze(0).numpy()
+
+    with tempfile.NamedTemporaryFile(suffix=".wav") as temp_wav:
+        sf.write(temp_wav.name, chunk_audio, sample_rate)
+        wav = model.generate(temp_wav.name, target_voice_path=target_voice_path)
+        return wav.squeeze(0).numpy()
+
+
 def generate(audio, target_voice_path, chunk_seconds, overlap_seconds):
     if target_voice_path:
         model.set_target_voice(target_voice_path)
 
     audio_samples, sample_rate = librosa.load(audio, sr=None, mono=True)
     if chunk_seconds <= 0:
-        wav = model.generate_from_audio(audio_samples, sample_rate)
-        return model.sr, wav.squeeze(0).numpy()
+        wav = _generate_chunk(audio_samples, sample_rate, target_voice_path=None)
+        return model.sr, wav
 
     chunk_samples = int(chunk_seconds * sample_rate)
     overlap_samples = int(overlap_seconds * sample_rate)
@@ -52,8 +65,8 @@ def generate(audio, target_voice_path, chunk_seconds, overlap_seconds):
     generated = []
     for start, end in chunks:
         chunk_audio = audio_samples[start:end]
-        wav = model.generate_from_audio(chunk_audio, sample_rate)
-        generated.append(wav.squeeze(0).numpy())
+        wav = _generate_chunk(chunk_audio, sample_rate, target_voice_path=None)
+        generated.append(wav)
 
     if not generated:
         return model.sr, np.array([], dtype=np.float32)
