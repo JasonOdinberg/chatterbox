@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import librosa
+import numpy as np
 import torch
 import perth
 from huggingface_hub import hf_hub_download
@@ -80,25 +81,41 @@ class ChatterboxVC:
         s3gen_ref_wav = s3gen_ref_wav[:self.DEC_COND_LEN]
         self.ref_dict = self.s3gen.embed_ref(s3gen_ref_wav, S3GEN_SR, device=self.device)
 
-    def generate(
-        self,
-        audio,
-        target_voice_path=None,
-    ):
+    def _ensure_reference(self, target_voice_path):
         if target_voice_path:
             self.set_target_voice(target_voice_path)
         else:
             assert self.ref_dict is not None, "Please `prepare_conditionals` first or specify `target_voice_path`"
 
+    def _generate_from_audio(self, audio_16: torch.Tensor) -> torch.Tensor:
+        s3_tokens, _ = self.s3gen.tokenizer(audio_16)
+        wav, _ = self.s3gen.inference(
+            speech_tokens=s3_tokens,
+            ref_dict=self.ref_dict,
+        )
+        wav = wav.squeeze(0).detach().cpu().numpy()
+        watermarked_wav = self.watermarker.apply_watermark(wav, sample_rate=self.sr)
+        return torch.from_numpy(watermarked_wav).unsqueeze(0)
+
+    def generate_from_audio(self, audio, sample_rate: int, target_voice_path=None):
+        self._ensure_reference(target_voice_path)
+        if isinstance(audio, torch.Tensor):
+            audio = audio.detach().cpu().numpy()
+        if audio.ndim > 1:
+            audio = np.mean(audio, axis=0)
+        if sample_rate != S3_SR:
+            audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=S3_SR)
+        audio_16 = torch.from_numpy(audio).float().to(self.device)[None, ]
+        return self._generate_from_audio(audio_16)
+
+    def generate(
+        self,
+        audio,
+        target_voice_path=None,
+    ):
+        self._ensure_reference(target_voice_path)
+
         with torch.inference_mode():
             audio_16, _ = librosa.load(audio, sr=S3_SR)
             audio_16 = torch.from_numpy(audio_16).float().to(self.device)[None, ]
-
-            s3_tokens, _ = self.s3gen.tokenizer(audio_16)
-            wav, _ = self.s3gen.inference(
-                speech_tokens=s3_tokens,
-                ref_dict=self.ref_dict,
-            )
-            wav = wav.squeeze(0).detach().cpu().numpy()
-            watermarked_wav = self.watermarker.apply_watermark(wav, sample_rate=self.sr)
-        return torch.from_numpy(watermarked_wav).unsqueeze(0)
+            return self._generate_from_audio(audio_16)
