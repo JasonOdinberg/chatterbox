@@ -1,7 +1,6 @@
 import librosa
 import numpy as np
 import soundfile as sf
-import os
 import tempfile
 import torch
 import gradio as gr
@@ -52,6 +51,10 @@ def _generate_chunk(chunk_audio, sample_rate, target_voice_path):
         return wav.squeeze(0).numpy()
     finally:
         os.remove(temp_path)
+    with tempfile.NamedTemporaryFile(suffix=".wav") as temp_wav:
+        sf.write(temp_wav.name, chunk_audio, sample_rate)
+        wav = model.generate(temp_wav.name, target_voice_path=target_voice_path)
+        return wav.squeeze(0).numpy()
 
 
 def generate(audio, target_voice_path, chunk_seconds, overlap_seconds):
